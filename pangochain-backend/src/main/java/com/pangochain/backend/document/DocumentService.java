@@ -168,7 +168,7 @@ public class DocumentService {
         enforceFabricAccessOrFailClosed(docId, requester);
 
         auditService.log("DOC_VIEWED", requester.getId(), "DOCUMENT",
-                docId.toString(), null, null);
+                docId.toString(), null, toJson(Map.of("requestId", releaseRequestId())));
 
         return ipfsService.cat(doc.getIpfsCid());
     }
@@ -440,18 +440,27 @@ public class DocumentService {
      * requester still needs an active DB grant, and every fallback access is audited as
      * ACL_FABRIC_FALLBACK); no published measurement exercises that mode.
      */
+    private String releaseRequestId() {
+        var attrs = org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+        if (attrs instanceof org.springframework.web.context.request.ServletRequestAttributes servlet) {
+            String id = servlet.getRequest().getHeader("X-Request-ID");
+            if (id != null && id.length() <= 128) return id;
+        }
+        return "";
+    }
+
     private void enforceFabricAccessOrFailClosed(UUID docId, User requester) throws FabricException {
         // EXPERIMENTAL BASELINE (Spring profile "audit-log-only", default OFF):
         // Fabric-as-passive-audit-log — the architecture the paper argues against.
         // Authorization comes from the local PostgreSQL ACL only (same query as
         // the fallback path); the ledger is NOT consulted on the release path.
-        // The decision is recorded through AuditService.log, which is @Async and
-        // anchors a LogAuditEvent transaction to Fabric off the request path.
+        // Both arms synchronously persist one RELEASE_DECISION row before release.
+        // A separate batched worker anchors these rows after database commit.
         // Used by experiments/baseline_auditlog/ (IMPROVEMENTS.md item 3.5a).
         if (environment.acceptsProfiles(Profiles.of("audit-log-only"))) {
             boolean allowed = accessRepository.findActiveEntry(docId, requester.getId()).isPresent();
-            auditService.log("ACL_AUDIT_LOG_ONLY", requester.getId(), "DOCUMENT", docId.toString(), null,
-                    toJson(Map.of("mode", "audit_log_only", "decision", allowed ? "allow" : "deny")));
+            auditService.log("RELEASE_DECISION", requester.getId(), "DOCUMENT", docId.toString(), null,
+                    toJson(Map.of("mode", "audit_log_only", "decision", allowed ? "allow" : "deny", "requestId", releaseRequestId())));
             if (!allowed) throw new AccessDeniedException("Access denied for document " + docId);
             return;
         }
@@ -476,6 +485,8 @@ public class DocumentService {
             throw e;
         }
 
+        auditService.log("RELEASE_DECISION", requester.getId(), "DOCUMENT", docId.toString(), null,
+                toJson(Map.of("mode", "ledger", "decision", allowed ? "allow" : "deny", "requestId", releaseRequestId())));
         log.info("ACL check: Layer1=PASS Layer2={} doc={} user={}",
                 allowed ? "PASS" : "FAIL", docId, requester.getEmail());
         if (!allowed) {

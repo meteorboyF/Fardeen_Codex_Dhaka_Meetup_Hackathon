@@ -1,0 +1,5 @@
+ceiling_seconds,availability_window_seconds,backdating_bound_seconds,outcome
+30,,,deploy_failed
+60,,,deploy_failed
+120,,,deploy_failed
+0,,,deploy_failed

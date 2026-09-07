@@ -1,0 +1,9 @@
+{
+  "experiment": "17b - staleness ceiling sweep",
+  "timestamp_utc": "2026-09-07T19:50:06Z",
+  "host": "Linux 7.0.0-31-generic x86_64",
+  "channel": "legal-channel", "chaincode": "legalcc",
+  "max_clock_skew_seconds": 120,
+  "ceilings": "30 60 120 0",
+  "poll_seconds": 3, "give_up_seconds": 200
+}

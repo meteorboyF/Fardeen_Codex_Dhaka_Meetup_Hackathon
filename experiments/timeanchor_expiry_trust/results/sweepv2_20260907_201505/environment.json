@@ -1,0 +1,7 @@
+{
+  "experiment": "17b v2 - staleness sweep, peer-clock freshness (audit S1)",
+  "timestamp_utc": "2026-09-07T20:15:05Z",
+  "host": "Linux 7.0.0-31-generic x86_64", "chaincode": "legalcc peer-clock freshness",
+  "max_clock_skew_seconds": 120, "ceilings": "30 60 120 0",
+  "poll_seconds": 3, "give_up_seconds": 200,
+  "git_commit": "7ec7556b1e499296003df50f5acf63d92c947d4e" }

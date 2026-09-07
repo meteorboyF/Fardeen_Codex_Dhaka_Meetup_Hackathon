@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Users, Plus, Trash2, Shield, Lock, Loader2, AlertCircle, Key, Clock } from 'lucide-react'
 import api from '../lib/api'
-import { eciesUnwrapKey, eciesWrapKey, loadWrappedPrivateKey, unwrapPrivateKey } from '../lib/crypto'
+import { eciesUnwrapKey, eciesWrapKey, attestKeyHash, loadWrappedPrivateKey, unwrapPrivateKey } from '../lib/crypto'
 import { useAuthStore } from '../store/authStore'
 import toast from 'react-hot-toast'
 
@@ -117,7 +117,10 @@ export function TeamAccessPanel({ docId, docName }: Props) {
       }
 
       const pkRes = await api.get(`/users/${recipient.id}/public-key`)
-      const recipientPubKey: JsonWebKey = JSON.parse(pkRes.data.publicKeyJwk)
+      const recipientPubKeyString: string = pkRes.data.publicKeyJwk
+      const recipientPubKey: JsonWebKey = JSON.parse(recipientPubKeyString)
+      // Attest the exact JWK string this wrap is produced under (audit finding S4).
+      const recipientKeyHash = await attestKeyHash(recipientPubKeyString)
 
       const { data: myWrappedKeyToken } = await api.get(`/documents/${docId}/wrapped-key`)
       const docKeyB64 = await eciesUnwrapKey(privateKey, myWrappedKeyToken, user?.id)
@@ -129,6 +132,7 @@ export function TeamAccessPanel({ docId, docName }: Props) {
         capability: grantCap,
         expiresAtEpochMs: grantExpiry ? new Date(grantExpiry).getTime() : null,
         wrappedKeyToken,
+        recipientKeyHash,
       })
 
       toast.success(`Access granted to ${recipient.email}`)

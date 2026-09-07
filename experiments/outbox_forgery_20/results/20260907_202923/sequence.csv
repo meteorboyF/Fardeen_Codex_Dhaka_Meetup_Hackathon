@@ -1,0 +1,4 @@
+case,description,result
+A,"control: legitimate grant via API","ledger=true signed=t (expect true/t)"
+B,"forge: attacker GrantAccess row with junk signature","status=FAILED ledger=false rejected=1 (expect FAILED/false/>=1)"
+C,"tamper: retarget a legitimately signed row","status=FAILED ledger=false (expect FAILED/false)"

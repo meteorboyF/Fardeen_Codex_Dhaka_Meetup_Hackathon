@@ -115,7 +115,9 @@ const (
 	disableFreshnessCheckForMeasurement = false
 
 	// MaxAnchorStalenessSeconds refuses access decisions once the anchor has stopped
-	// advancing for this long, measured against the caller's own proposal timestamp.
+	// advancing for this long, measured against the answering peer's own wall clock
+	// (pre-submission audit S1: measuring it against the caller's proposal timestamp
+	// is circular, since a caller choosing P = A defeats any ceiling).
 	//
 	// This exists because the backdating bound is only as good as the anchor's freshness,
 	// and the party submitting heartbeats is the same custodial gateway the mechanism is
@@ -136,7 +138,8 @@ const (
 	// zero would disable the ceiling silently. As a constant, weakening it requires
 	// redeploying the chaincode, which Fabric's lifecycle already gates behind multi-org
 	// approval. The cost is that Experiment 17 must redeploy to sweep it.
-	MaxAnchorStalenessSeconds = 0
+	// (Declared as a package variable below purely so unit tests can exercise
+	// nonzero ceilings; nothing in the chaincode mutates it at runtime.)
 
 	StatusActive    = "ACTIVE"
 	StatusRevoked   = "REVOKED"
@@ -147,4 +150,10 @@ const (
 	CapOwner = "owner"
 	CapWrite = "write"
 	CapRead  = "read"
+)
+
+// See the commentary in the constant block above: sweep-settable at build time,
+// test-settable in unit tests, never mutated at runtime.
+var (
+	MaxAnchorStalenessSeconds = 0
 )

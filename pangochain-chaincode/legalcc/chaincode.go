@@ -658,10 +658,22 @@ func assertProposalTimeIsFresh(ctx contractapi.TransactionContextInterface, prop
 			"proposal timestamp %s is %.0fs behind the endorsed time anchor %s, exceeding the %ds tolerance",
 			proposed.Format(time.RFC3339), behind.Seconds(), anchor.Timestamp, MaxClockSkewSeconds)
 	}
+	// Anchor staleness is measured with the answering peer's own wall clock, never
+	// with the caller-supplied proposal timestamp. Measuring it against the proposal
+	// is circular: a caller that backdates the proposal to the anchor's own instant
+	// (P = A) makes an arbitrarily old anchor look fresh, and the ceiling then bounds
+	// nothing (pre-submission audit, finding S1). CheckAccess runs only as an
+	// evaluate answered by a single peer, so consulting that peer's clock introduces
+	// no endorsement nondeterminism and extends an assumption the design already
+	// makes, namely that the answering peer returns honest state. With this check the
+	// composed bound holds against a malicious proposal clock: the anchor is at most
+	// the ceiling old by the peer's clock, and the proposal is at most the skew
+	// tolerance behind the anchor, so a proposal timestamp cannot sit more than
+	// ceiling+skew behind the peer's present.
 	if MaxAnchorStalenessSeconds > 0 {
-		if stale := proposed.Sub(anchored); stale > MaxAnchorStalenessSeconds*time.Second {
+		if stale := time.Now().UTC().Sub(anchored); stale > time.Duration(MaxAnchorStalenessSeconds)*time.Second {
 			return fmt.Errorf(
-				"time anchor %s is %.0fs stale relative to this proposal, exceeding the %ds ceiling; "+
+				"time anchor %s is %.0fs stale by the answering peer's clock, exceeding the %ds ceiling; "+
 					"refusing to decide from state whose freshness cannot be established",
 				anchor.Timestamp, stale.Seconds(), MaxAnchorStalenessSeconds)
 		}

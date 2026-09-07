@@ -39,6 +39,7 @@ public class AnchorReconciliationWorker {
     private final PendingAnchorRepository pendingAnchorRepository;
     private final AuditService auditService;
     private final ObjectMapper objectMapper;
+    private final OutboxSigner outboxSigner;
 
     @Autowired(required = false)
     private FabricGatewayService fabricGatewayService;
@@ -63,6 +64,24 @@ public class AnchorReconciliationWorker {
                 PendingAnchor.Status.PENDING, Instant.now(),
                 PageRequest.of(0, MAX_BATCH, Sort.by("createdAt")));
         for (PendingAnchor anchor : due) {
+            // Audit finding S2: refuse rows this gateway did not sign. The outbox lives in
+            // the operational database, so without authentication a database writer could
+            // mint ledger mutations that the worker would submit with the gateway's
+            // credentials. A row that fails verification is terminal, audited, and never
+            // replayed.
+            if (!outboxSigner.verify(anchor)) {
+                anchor.setStatus(PendingAnchor.Status.FAILED);
+                anchor.setLastError("outbox signature verification failed; row was not created by this gateway");
+                pendingAnchorRepository.save(anchor);
+                auditService.log("OUTBOX_ANCHOR_REJECTED_FORGED", anchor.getRevokerId(), "DOCUMENT",
+                        anchor.getDocId().toString(), null,
+                        toJson(Map.of(
+                                "pendingAnchorId", anchor.getId().toString(),
+                                "chaincodeFunction", String.valueOf(anchor.getChaincodeFunction()))));
+                log.warn("Anchor {} REJECTED: signature verification failed (possible forged outbox row)",
+                        anchor.getId());
+                continue;
+            }
             // FIFO guard: never replay an anchor while an older PENDING sibling exists for the
             // same (doc, user). A grant queued before a revoke that committed after it would
             // re-authorize the revoked user; draining in creation order per pair makes the
@@ -91,6 +110,7 @@ public class AnchorReconciliationWorker {
                         anchor.getTargetUserId().toString(),
                         anchor.getRevokerId().toString());
                 case "GrantAccess" -> replayGrant(anchor);
+                case "RegisterUserKey" -> replayRegisterUserKey(anchor);
                 default -> throw new FabricException(
                         "No reconciliation handler for chaincode function: " + anchor.getChaincodeFunction());
             };
@@ -116,6 +136,25 @@ public class AnchorReconciliationWorker {
                             "retries", anchor.getAttempts(),
                             "divergenceWindowMs", divergenceMs)));
         } catch (FabricException e) {
+            // A deterministic chaincode rejection can never succeed on retry; endless
+            // replay would only mask it. "Already anchored" on a key binding is the
+            // idempotent success case; anything else deterministic is terminal.
+            if (e.isDeterministicRejection()) {
+                if ("RegisterUserKey".equals(anchor.getChaincodeFunction())
+                        && e.getMessage() != null && e.getMessage().contains("already anchored")) {
+                    anchor.setStatus(PendingAnchor.Status.COMMITTED);
+                    anchor.setCommittedAt(Instant.now());
+                    anchor.setLastError("binding already anchored; treated as committed");
+                    pendingAnchorRepository.save(anchor);
+                    return;
+                }
+                anchor.setStatus(PendingAnchor.Status.FAILED);
+                anchor.setLastError("deterministic chaincode rejection: " + e.getMessage());
+                pendingAnchorRepository.save(anchor);
+                log.warn("Anchor {} ({}) FAILED terminally: {}", anchor.getId(),
+                        anchor.getChaincodeFunction(), e.getMessage());
+                return;
+            }
             anchor.setAttempts(anchor.getAttempts() + 1);
             anchor.setLastError(e.getMessage());
             long backoffSeconds = Math.min(
@@ -151,6 +190,20 @@ public class AnchorReconciliationWorker {
             throw e;
         } catch (Exception e) {
             throw new FabricException("Unreadable GrantAccess payload for anchor " + anchor.getId(), e);
+        }
+    }
+
+    /** Replays a queued enrollment key anchor (audit finding S5). */
+    private String replayRegisterUserKey(PendingAnchor anchor) throws FabricException {
+        try {
+            Map<String, String> p = objectMapper.readValue(anchor.getPayload(),
+                    objectMapper.getTypeFactory().constructMapType(Map.class, String.class, String.class));
+            return fabricGatewayService.registerUserKey(
+                    anchor.getTargetUserId().toString(), p.get("keyHash"));
+        } catch (FabricException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new FabricException("Unreadable RegisterUserKey payload for anchor " + anchor.getId(), e);
         }
     }
 

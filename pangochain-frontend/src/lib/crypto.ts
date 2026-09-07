@@ -204,6 +204,18 @@ async function deriveWrappingKey(
 }
 
 /**
+ * SHA-256 hex over the exact public-key JWK string the client fetched and is about to
+ * wrap under (audit finding S4). Sent alongside the grant as the recipient-key
+ * attestation, so the chaincode compares the key the wrap was actually produced under
+ * against the enrollment-time anchor; a key substituted after the fetch, or restored
+ * in the database before submission, still fails verification.
+ */
+export async function attestKeyHash(publicKeyJwkString: string): Promise<string> {
+  const digest = await subtle.digest('SHA-256', new TextEncoder().encode(publicKeyJwkString))
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
  * Wrap a document key (keyB64) with recipient's P-256 public key.
  * Uses ECDH + HKDF-SHA256 to derive a wrapping key, then AES-GCM to encrypt.
  * Output is a single base64 blob: ephemeralPubKey(65) || iv(12) || wrapped(32+16)

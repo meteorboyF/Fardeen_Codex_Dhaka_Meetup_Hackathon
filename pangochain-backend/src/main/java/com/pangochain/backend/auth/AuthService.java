@@ -1,6 +1,9 @@
 package com.pangochain.backend.auth;
 
 import com.pangochain.backend.audit.AuditService;
+import com.pangochain.backend.access.OutboxSigner;
+import com.pangochain.backend.access.PendingAnchor;
+import com.pangochain.backend.access.PendingAnchorRepository;
 import com.pangochain.backend.blockchain.FabricException;
 import com.pangochain.backend.blockchain.FabricGatewayService;
 import com.pangochain.backend.crypto.KeyHashing;
@@ -37,6 +40,8 @@ public class AuthService {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private FabricGatewayService fabricGatewayService;
+    private final PendingAnchorRepository pendingAnchorRepository;
+    private final OutboxSigner outboxSigner;
 
     private static final GoogleAuthenticator gAuth = new GoogleAuthenticator();
 
@@ -84,11 +89,28 @@ public class AuthService {
         // and the user remains grantable under the migration posture (binding absent).
         String keyAnchorTx = null;
         if (fabricGatewayService != null && user.getPublicKeyEcies() != null) {
+            String keyHash = KeyHashing.sha256Hex(user.getPublicKeyEcies());
             try {
-                keyAnchorTx = fabricGatewayService.registerUserKey(
-                        user.getId().toString(), KeyHashing.sha256Hex(user.getPublicKeyEcies()));
+                keyAnchorTx = fabricGatewayService.registerUserKey(user.getId().toString(), keyHash);
             } catch (FabricException e) {
-                log.warn("RegisterUserKey failed for {} (user remains unbound): {}", user.getEmail(), e.getMessage());
+                // Audit finding S5: a user enrolled during a ledger outage must not stay
+                // unbound indefinitely. The binding is queued in the durable outbox and
+                // the reconciliation worker retries it; docId and targetUserId both carry
+                // the user id, since no document is involved.
+                log.warn("RegisterUserKey failed for {}; queuing durable anchor: {}", user.getEmail(), e.getMessage());
+                PendingAnchor anchor = PendingAnchor.builder()
+                        .chaincodeFunction("RegisterUserKey")
+                        .docId(user.getId())
+                        .targetUserId(user.getId())
+                        .revokerId(user.getId())
+                        .status(PendingAnchor.Status.PENDING)
+                        .attempts(0)
+                        .nextAttemptAt(Instant.now())
+                        .payload("{\"keyHash\":\"" + keyHash + "\"}")
+                        .lastError(e.getMessage())
+                        .build();
+                anchor.setSignature(outboxSigner.sign(anchor));
+                pendingAnchorRepository.save(anchor);
             }
         }
 

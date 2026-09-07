@@ -201,6 +201,11 @@ public class FabricGatewayService {
         return submitTransaction("RegisterUserKey", userId, keyHash);
     }
 
+    /** Returns the anchored user-key binding JSON, or an empty string when unbound. */
+    public String getUserKeyBinding(String userId) throws FabricException {
+        return evaluateTransaction("GetUserKeyBinding", userId);
+    }
+
     public String revokeAccess(String docId, String targetSubject, String revokerId) throws FabricException {
         return submitTransaction("RevokeAccess", docId, targetSubject, revokerId);
     }

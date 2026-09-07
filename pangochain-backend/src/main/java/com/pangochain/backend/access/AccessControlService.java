@@ -37,6 +37,15 @@ public class AccessControlService {
     private final AuditService auditService;
     private final ObjectMapper objectMapper;
     private final PendingAnchorRepository pendingAnchorRepository;
+    private final OutboxSigner outboxSigner;
+
+    /**
+     * When true, a grant to a recipient with no ledger-anchored key binding is refused
+     * (strict migration posture); the shipped default accepts unbound recipients and
+     * records the grant as unbound.
+     */
+    @org.springframework.beans.factory.annotation.Value("${access.require-key-binding:false}")
+    private boolean requireKeyBinding;
 
     /** Result of {@link #revoke}: whether the ledger anchor committed inline or was queued. */
     public record RevokeResult(boolean ledgerCommitted, String fabricTxId, UUID pendingAnchorId) {}
@@ -90,8 +99,27 @@ public class AccessControlService {
         // binding anchored at enrollment and refuses a substituted key.
         String granteeMsp = grantee.getFirm() != null ? grantee.getFirm().getMspId() : "FirmAMSP";
         String expiryStr = expiresAt != null ? expiresAt.toString() : "";
-        String recipientKeyHash = grantee.getPublicKeyEcies() != null
-                ? KeyHashing.sha256Hex(grantee.getPublicKeyEcies()) : "";
+        // Prefer the client's attestation of the key it actually wrapped under (S4);
+        // fall back to hashing the stored key for clients that predate the field.
+        boolean clientAttested = req.getRecipientKeyHash() != null && !req.getRecipientKeyHash().isBlank();
+        String recipientKeyHash = clientAttested
+                ? req.getRecipientKeyHash()
+                : (grantee.getPublicKeyEcies() != null ? KeyHashing.sha256Hex(grantee.getPublicKeyEcies()) : "");
+
+        if (requireKeyBinding && fabricGatewayService != null) {
+            try {
+                String binding = fabricGatewayService.getUserKeyBinding(grantee.getId().toString());
+                if (binding == null || binding.isBlank()) {
+                    throw new org.springframework.web.server.ResponseStatusException(
+                            org.springframework.http.HttpStatus.FORBIDDEN,
+                            "Recipient has no ledger-anchored key binding and strict binding mode is enabled.");
+                }
+            } catch (FabricException e) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                        "Strict binding mode requires the ledger, which is unreachable.");
+            }
+        }
         PendingAnchor anchor = PendingAnchor.builder()
                 .chaincodeFunction("GrantAccess")
                 .docId(docId)
@@ -105,13 +133,22 @@ public class AccessControlService {
                         "capability", req.getCapability().toLowerCase(),
                         "expiresAt", expiryStr,
                         "wrappedKeyRef", req.getWrappedKeyToken(),
-                        "recipientKeyHash", recipientKeyHash)))
+                        "recipientKeyHash", recipientKeyHash,
+                        "keyHashSource", clientAttested ? "client" : "gateway-db")))
                 .build();
+        anchor.setSignature(outboxSigner.sign(anchor));
 
         String fabricTxId = null;
         boolean ledgerCommitted = false;
         try {
             if (fabricGatewayService == null) throw new FabricException("Fabric not enabled");
+            // Intent-order guard for the inline path (audit finding S6): if an older
+            // mutation for this (document, user) is still pending, submitting inline
+            // would jump the queue, so this mutation is queued behind it instead.
+            if (pendingAnchorRepository.existsByStatusAndDocIdAndTargetUserIdAndCreatedAtBefore(
+                    PendingAnchor.Status.PENDING, docId, granteeId, Instant.now())) {
+                throw new FabricException("older pending anchors exist for this document and user; queued to preserve intent order");
+            }
             fabricTxId = fabricGatewayService.grantAccess(
                     docId.toString(),
                     grantee.getId().toString(),
@@ -213,11 +250,17 @@ public class AccessControlService {
                 .attempts(0)
                 .nextAttemptAt(Instant.now())
                 .build();
+        anchor.setSignature(outboxSigner.sign(anchor));
 
         String fabricTxId = null;
         boolean ledgerCommitted = false;
         try {
             if (fabricGatewayService == null) throw new FabricException("Fabric not enabled");
+            // Intent-order guard for the inline path (audit finding S6); see grant().
+            if (pendingAnchorRepository.existsByStatusAndDocIdAndTargetUserIdAndCreatedAtBefore(
+                    PendingAnchor.Status.PENDING, docId, targetUserId, Instant.now())) {
+                throw new FabricException("older pending anchors exist for this document and user; queued to preserve intent order");
+            }
             fabricTxId = fabricGatewayService.revokeAccess(docIdStr, targetUserIdStr, revoker.getId().toString());
             ledgerCommitted = true;
         } catch (FabricException e) {

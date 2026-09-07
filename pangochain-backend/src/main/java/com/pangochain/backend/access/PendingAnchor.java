@@ -74,6 +74,14 @@ public class PendingAnchor {
     @Column(columnDefinition = "TEXT")
     private String payload;
 
+    /**
+     * Gateway HMAC over the replay-relevant fields (audit finding S2). Rows whose
+     * signature does not verify are refused by the reconciliation worker, so a database
+     * writer cannot mint ledger mutations by inserting or altering outbox rows.
+     */
+    @Column(columnDefinition = "TEXT")
+    private String signature;
+
     @PrePersist
     void prePersist() {
         if (createdAt == null) createdAt = Instant.now();

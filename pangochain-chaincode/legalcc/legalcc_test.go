@@ -11,6 +11,7 @@ import (
 	"github.com/hyperledger/fabric-chaincode-go/shim"
 	"github.com/hyperledger/fabric-chaincode-go/shimtest"
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // ─── Mock ClientIdentity ──────────────────────────────────────────────────────
@@ -177,7 +178,7 @@ func TestCheckAccess_Granted(t *testing.T) {
 	contract := &LegalContract{}
 
 	_ = contract.RegisterDocument(ctx, "doc-acl", "case-001", "hash", "Qm1", "owner-001", "TestMSP", nowTS())
-	_ = contract.GrantAccess(ctx, "doc-acl", "user-002", "TestMSP", CapRead, "", "wrapped-key", "owner-001")
+	_ = contract.GrantAccess(ctx, "doc-acl", "user-002", "TestMSP", CapRead, "", "wrapped-key", "owner-001", "")
 	commitTx(stub, "tx-acl-1")
 
 	stub.MockTransactionStart("tx-acl-check")
@@ -361,7 +362,7 @@ func TestCheckAccess_RejectsBackdatedProposal(t *testing.T) {
 	// Grant expired an hour ago.
 	expired := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
 	_ = contract.RegisterDocument(ctx, "doc-bd", "case-bd", "hash", "Qm-bd", "owner-bd", "TestMSP", nowTS())
-	_ = contract.GrantAccess(ctx, "doc-bd", "user-bd", "TestMSP", CapRead, expired, "wrapped", "owner-bd")
+	_ = contract.GrantAccess(ctx, "doc-bd", "user-bd", "TestMSP", CapRead, expired, "wrapped", "owner-bd", "")
 	commitTx(stub, "tx-backdate-setup")
 
 	// No anchor yet: the mechanism is inactive, so this is the pre-fix behaviour. The grant
@@ -399,7 +400,7 @@ func TestCheckAccess_AnchorDoesNotBlockLiveGrant(t *testing.T) {
 
 	future := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
 	_ = contract.RegisterDocument(ctx, "doc-live", "case-live", "hash", "Qm-live", "owner-live", "TestMSP", nowTS())
-	_ = contract.GrantAccess(ctx, "doc-live", "user-live", "TestMSP", CapRead, future, "wrapped", "owner-live")
+	_ = contract.GrantAccess(ctx, "doc-live", "user-live", "TestMSP", CapRead, future, "wrapped", "owner-live", "")
 	commitTx(stub, "tx-anchor-live")
 
 	// Anchor a few seconds old, as a recent heartbeat would leave it.
@@ -426,7 +427,7 @@ func TestCheckAccess_StaleAnchorStillAuthorisesLiveGrant(t *testing.T) {
 
 	future := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
 	_ = contract.RegisterDocument(ctx, "doc-sa", "case-sa", "hash", "Qm-sa", "owner-sa", "TestMSP", nowTS())
-	_ = contract.GrantAccess(ctx, "doc-sa", "user-sa", "TestMSP", CapRead, future, "wrapped", "owner-sa")
+	_ = contract.GrantAccess(ctx, "doc-sa", "user-sa", "TestMSP", CapRead, future, "wrapped", "owner-sa", "")
 	commitTx(stub, "tx-anchor-staleanchor")
 
 	// Anchor is two hours old: ordering has been unavailable for a while.
@@ -496,7 +497,7 @@ func TestCheckAccess_SameOrgWithExplicitGrantIsAllowed(t *testing.T) {
 	contract := &LegalContract{}
 
 	_ = contract.RegisterDocument(ctx, "doc-m5g", "case-m5g", "hash", "Qm-m5g", "owner-m5g", "FirmAMSP", nowTS())
-	_ = contract.GrantAccess(ctx, "doc-m5g", "colleague-m5g", "FirmAMSP", CapRead, "", "wrapped", "owner-m5g")
+	_ = contract.GrantAccess(ctx, "doc-m5g", "colleague-m5g", "FirmAMSP", CapRead, "", "wrapped", "owner-m5g", "")
 	commitTx(stub, "tx-m5-grant")
 
 	stub.MockTransactionStart("tx-m5-grant-check")
@@ -508,3 +509,67 @@ func TestCheckAccess_SameOrgWithExplicitGrantIsAllowed(t *testing.T) {
 		t.Errorf("explicitly granted same-org colleague should have access: got %q err=%v", result, err)
 	}
 }
+
+// ─── Audit finding S1: the P = A freshness counterexample ─────────────────────
+
+// timestampOverrideStub lets a test present an arbitrary proposal timestamp, which
+// the shimtest mock cannot do on its own. It stands in for a caller that controls
+// the timestamp field of its own proposal, which is exactly the adversary of A7.
+type timestampOverrideStub struct {
+	shim.ChaincodeStubInterface
+	at time.Time
+}
+
+func (s *timestampOverrideStub) GetTxTimestamp() (*timestamppb.Timestamp, error) {
+	return timestamppb.New(s.at), nil
+}
+
+// The pre-submission audit's S1 counterexample: measure anchor staleness against the
+// caller-supplied proposal timestamp and a caller that sets P = A makes an arbitrarily
+// old anchor look fresh, so an expired grant is authorised from the past. With staleness
+// measured by the answering peer's own clock the same proposal is refused.
+func TestCheckAccess_RejectsForgedFreshness_PEqualsA(t *testing.T) {
+	ctx, stub := setupCtx(t, "tx-s1-setup")
+	contract := &LegalContract{}
+
+	// Grant expired one hour ago, but it was still live two hours ago.
+	expired := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	_ = contract.RegisterDocument(ctx, "doc-s1", "case-s1", "hash", "Qm-s1", "owner-s1", "TestMSP", nowTS())
+	_ = contract.GrantAccess(ctx, "doc-s1", "user-s1", "TestMSP", CapRead, expired, "wrapped", "owner-s1", "")
+	commitTx(stub, "tx-s1-setup")
+
+	// Enable a ceiling for this test; the shipped default of zero disables the
+	// check entirely, which is the documented no-bound configuration.
+	MaxAnchorStalenessSeconds = 120
+	defer func() { MaxAnchorStalenessSeconds = 0 }()
+
+	// The heartbeat has been starved for two hours: the anchor is far beyond the ceiling.
+	anchorAt := time.Now().Add(-2 * time.Hour)
+	seedAnchor(t, stub, anchorAt)
+
+	// The attacker submits a proposal whose timestamp equals the anchor's own instant.
+	// Both proposal-versus-anchor comparisons then pass by construction; only a check
+	// against a clock the caller does not control can refuse this.
+	stub.MockTransactionStart("tx-s1-attack")
+	forged := &timestampOverrideStub{ChaincodeStubInterface: stub, at: anchorAt}
+	attackCtx := &overrideContext{stub: forged, cid: &mockClientIdentity{mspID: "TestMSP"}}
+	result, err := contract.CheckAccess(attackCtx, "doc-s1", "user-s1", "TestMSP")
+	commitTx(stub, "tx-s1-attack")
+
+	if err == nil {
+		t.Error("expected the stale anchor to be refused by the peer clock, got no error")
+	}
+	if result == "true" {
+		t.Error("P = A forged-freshness proposal must not be authorised")
+	}
+}
+
+// overrideContext is testContext with an arbitrary stub interface, so wrapper stubs
+// can be injected.
+type overrideContext struct {
+	stub shim.ChaincodeStubInterface
+	cid  *mockClientIdentity
+}
+
+func (tc *overrideContext) GetStub() shim.ChaincodeStubInterface { return tc.stub }
+func (tc *overrideContext) GetClientIdentity() cid.ClientIdentity { return tc.cid }

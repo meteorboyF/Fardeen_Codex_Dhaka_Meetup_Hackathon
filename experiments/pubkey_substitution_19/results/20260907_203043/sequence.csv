@@ -1,0 +1,7 @@
+case,description,result
+A,"control: grant to ledger-bound recipient, key unmodified","HTTP 200 sync=committed (expect 200 committed)"
+B,"attack: grant after DB key substitution","HTTP 403 (expect 4xx refused) msg="
+B2,"attack refusal is audited on the ledger trail","ACCESS_GRANT_REJECTED_KEY_MISMATCH rows=1"
+C,"immutability: attacker re-anchors substitute key","REFUSED (immutable) (expect REFUSED)"
+D,"migration: unbound legacy user still grantable","HTTP 200 binding_empty=yes audit=keyBinding:? (expect 2xx, keyBinding=absent)"
+E,"restore race: client-attested substitute vs restored DB key","HTTP 403 (expect 4xx: attestation catches it though DB key now matches anchor)"

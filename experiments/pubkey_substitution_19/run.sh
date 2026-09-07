@@ -115,4 +115,25 @@ KB=$(pg "SELECT metadata_json FROM audit_log WHERE resource_id='$DOC' AND event_
 log "[D] legacy-unbound grant: HTTP $CODE (on-chain binding empty=$([ -z "$BOUND" ] && echo yes || echo no); audit $KB)"
 step D "migration: unbound legacy user still grantable" "HTTP $CODE binding_empty=$([ -z "$BOUND" ] && echo yes || echo no) audit=$KB (expect 2xx, keyBinding=absent)"
 
+# ── E: restore race — client attests the substituted key, attacker restores DB key ──
+# This is the case the audit (S4) flagged: hashing the current DB key at submission time
+# would PASS after the attacker restores the original key, but the client attests the key
+# it actually wrapped under, so the mismatch against the anchor survives the restore.
+pg "UPDATE users SET status='ACTIVE' WHERE id='$GRANTEE'" >/dev/null
+ORIG_KEY_E=$(pg "SELECT public_key_ecies FROM users WHERE id='$GRANTEE'")
+ATT_KEY_E=$(node "$EXP_DIR/attacker_key.mjs")
+ATT_HASH_E=$(node "$EXP_DIR/hash_jwk.mjs" "$ATT_KEY_E")
+# 1. attacker substitutes the published key; 2. client fetches it and wraps+attests under it
+pg "UPDATE users SET public_key_ecies='$ATT_KEY_E' WHERE id='$GRANTEE'" >/dev/null
+# 3. attacker restores the original DB key before the grant is submitted
+pg "UPDATE users SET public_key_ecies='$ORIG_KEY_E' WHERE id='$GRANTEE'" >/dev/null
+# 4. grant carries the CLIENT attestation of the substituted key (what was wrapped under)
+RESP=$(curl -s -w '\n%{http_code}' -X POST "$BASE/access/grant" -H "Authorization: Bearer $TOK_O" \
+  -H 'Content-Type: application/json' \
+  -d "{\"docId\":\"$DOC\",\"granteeId\":\"$GRANTEE\",\"capability\":\"read\",\"wrappedKeyToken\":\"$WRAP\",\"recipientKeyHash\":\"$ATT_HASH_E\"}")
+CODE=$(echo "$RESP" | tail -1)
+DB_MATCHES_ANCHOR=$(pg "SELECT public_key_ecies FROM users WHERE id='$GRANTEE'" | head -c 20)
+log "[E] restore race (client attested substituted key, DB restored): HTTP $CODE"
+step E "restore race: client-attested substitute vs restored DB key" "HTTP $CODE (expect 4xx: attestation catches it though DB key now matches anchor)"
+
 log "done — results in $OUT_DIR"
