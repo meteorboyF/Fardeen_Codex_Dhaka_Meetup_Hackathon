@@ -1,0 +1,12 @@
+metric,n,median,ci95_lo,ci95_hi,unit
+CheckAccess P50 ledger (pooled brackets),200,10.99,10.7,11.24,ms
+CheckAccess P50 database,100,6.44,6.21,6.7,ms
+RegisterDocument P50,100,2087.4,2086.4,2088.2,ms
+Revocation divergence window (new build),5,13.92,11.87,14.95,s
+Grant divergence window (new build),5,15.27,13.63,20.16,s
+"Release P50 on-path, conc 10",1000,16.55,16.16,17.02,ms
+"Release P50 audit-log durable, conc 10",1000,32.75,26.55,45.72,ms
+Fabric commit latency (size-independent),5,2131.7,2128.6,2136.9,ms
+Audit query P50 operational store,10,3.855,2.397,4.28,ms
+History retrieval P50 depth 107,10,135.5,128.0,137.5,ms
+Storage retrieval P50 50MB cross-node conc1,24,867.45,855.85,911.0,ms

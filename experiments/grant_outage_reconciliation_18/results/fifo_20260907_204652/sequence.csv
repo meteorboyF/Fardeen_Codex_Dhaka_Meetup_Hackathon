@@ -1,0 +1,13 @@
+step,description,result
+0,"baseline download, no grant (healthy)","HTTP 403"
+1,"stop orderers (peers up)","stopped orderer1.pangochain.com orderer2.pangochain.com orderer3.pangochain.com"
+2,"grant during outage (durable outbox)","HTTP 202 sync=pending"
+2b,"revoke during outage (behind pending grant)","HTTP 202"
+3,"download mid-outage after grant issued","HTTP 403"
+4,"wrapped-key mid-outage after grant issued","HTTP 403"
+5,"tri-state mid-outage (ledger/db/outbox)","ledger=false db=read|f anchors=GrantAccess:PENDING
+RevokeAccess:PENDING"
+6,"orderers restarted, unattended convergence","converged=1 ledger=false poll_s=17"
+7,"download after reconciliation","HTTP 403"
+8,"grant divergence window (outbox timestamps)","15.267144 s"
+9,"fifo intent-order preserved (grant before revoke)","t"

@@ -77,3 +77,14 @@ audit anchoring remain availability-first without an outbox (RegisterDocument's
 divergence is confined to provenance, not authorization — the release path never
 authorizes from an unanchored registration); and n=6/n=3 on one host and one
 outage geometry, matching the scope of 16b.
+
+## 2026-09-07 rerun on the hardened build (audit response)
+
+Grant arm rerun n=5 plus two mixed-queue FIFO runs on the hardened build
+(signed outbox, inline FIFO guard). All grant runs: 202/pending during the
+outage, 403 for the grantee mid-outage, unattended convergence, 200 after.
+Windows (outbox timestamps): 16.287240, 13.631087, 15.274115, 20.157906,
+14.113037 s; median 15.27 s (mean 15.89, SD 2.60, bootstrap 95% CI
+[13.63, 20.16]). Both FIFO runs drained grant before revoke with final
+CheckAccess=false and download 403. These supersede the 20260831 grant
+windows (n=6, median 14.35 s), which describe the pre-hardening build.

@@ -1,0 +1,10 @@
+step,description,result
+0,"baseline download (healthy)","HTTP 200"
+1,"stop orderers (peers up)","stopped orderer1.pangochain.com orderer2.pangochain.com orderer3.pangochain.com"
+2,"download during outage (evaluate->peer)","HTTP 200"
+3,"revoke during outage (durable outbox)","HTTP 202 {""ledgerSyncStatus"":""pending"",""pendingAnchorId"":""8deb8dd4-bc89-4a69-ad6e-3b7e58a30299""}"
+4,"download after revoke (still outage)","HTTP 200"
+5,"wrapped-key after revoke (DB-gated)","HTTP 403"
+6,"ledger/DB/outbox during outage","ledger=true db_revoked=t anchor=PENDING"
+7,"auto-reconciliation after orderer recovery","reconciled=true divergence_window_s=17"
+8,"download after reconciliation","HTTP 403"

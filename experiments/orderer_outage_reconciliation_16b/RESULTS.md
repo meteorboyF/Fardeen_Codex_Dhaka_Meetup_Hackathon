@@ -204,3 +204,24 @@ a network outage but is not. Refresh them from
 `pangochain-fabric/crypto-config/peerOrganizations/firma.pangochain.com/`
 (tlsca cert, Admin signcert, and Admin `keystore/priv_sk`) before running.
 The first attempt at this experiment was blocked by exactly that.
+
+## 2026-09-07 rerun on the hardened build (audit response)
+
+After the pre-submission audit repairs (peer-clock freshness check, signed
+outbox rows, inline FIFO guard), the full revoke arm was rerun n=5 on the
+second host (i5-1035G1, 14 GB). Every run reproduces every row of the
+post-fix sequence (202/pending during outage, unattended reconvergence,
+403 after). Divergence windows from the outbox row's own timestamps:
+
+| run | window (s) |
+|---|---|
+| 20260907_203258 | 12.266028 |
+| 20260907_203333 | 11.871487 |
+| 20260907_203408 | 14.938261 |
+| 20260907_203446 | 13.917705 |
+| 20260907_203522 | 14.949673 |
+
+Median 13.92 s (mean 13.59, SD 1.46, bootstrap 95% CI [11.87, 14.95] at seed
+42 via consolidated/build_table_v2.py). These supersede the 20260831 windows
+(median 15.92 s) quoted in earlier drafts; the earlier runs describe the
+pre-hardening build and are retained.
